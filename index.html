@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch Btv 상황판 접속 시험</title>
+<style>
+  body{background:#0d1318;color:#e2e8ed;font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;margin:0;padding:32px 16px}
+  .wrap{max-width:720px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 8px}
+  p{color:#8696a3;font-size:14px;line-height:1.7}
+  .res{font-size:28px;font-weight:700;border:2px solid #26333d;border-radius:8px;padding:20px;margin-top:16px;text-align:center}
+  .ok{color:#3fb27f;border-color:#3fb27f} .bad{color:#ef5350;border-color:#ef5350}
+  small{display:block;margin-top:12px;color:#8696a3;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ch Btv 재난특보 상황판 — 접속 시험 페이지</h1>
+  <p>이 페이지는 사내 PC에서 GitHub Pages 주소가 열리는지 확인하기 위한 시험용입니다. 업무 자료·키는 들어 있지 않습니다.</p>
+  <div class="res" id="res">확인 중…</div>
+  <small id="env"></small>
+</div>
+<script>
+(function () {
+  var el = document.getElementById('res');
+  fetch('test.json?t=' + Date.now(), { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j && j.check === 'chbtv-ok') { el.className = 'res ok'; el.textContent = '정상 — 페이지·자료 파일 모두 열림'; }
+      else { el.className = 'res bad'; el.textContent = '페이지는 열렸으나 자료 파일 내용 불일치'; }
+    })
+    .catch(function () { el.className = 'res bad'; el.textContent = '페이지는 열렸으나 자료 파일 읽기 실패'; })
+    .then(function () { document.getElementById('env').textContent = '확인 시각: ' + new Date().toLocaleString('ko-KR') + ' · 주소: ' + location.href; });
+})();
+</script>
+</body>
+</html>
