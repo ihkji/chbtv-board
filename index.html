@@ -104,7 +104,7 @@ window.__PUBLIC_VIEWER__ = true;
       C = c; return keysFor(c.pass);
     }).then(function (K) {
       var url = C.url;
-      var ts = Date.now(), p = JSON.stringify({ a: args || [], dev: LSG('pnl.dev') });
+      var ts = Date.now(), p = JSON.stringify({ a: args || [], dev: LSG('pnl.dev'), did: devId() });
       return crypto.subtle.sign('HMAC', K.auth, te(op + '\n' + ts + '\n' + p)).then(function (sig) {
         return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: op, ts: ts, p: p, sig: hex(sig) }) })
           .catch(function (e) { throw new Error('중계 접속 실패(' + String(e && e.message || e) + ') — 네트워크 차단 또는 n8n CORS(Allowed Origins) 설정 확인 · 주소 ' + maskUrl(url)); });
@@ -158,13 +158,27 @@ window.__PUBLIC_VIEWER__ = true;
     withSuccessHandler: function (okF) { return { withFailureHandler: function (ngF) { return runner(okF, ngF); } }; },
     withFailureHandler: function (ngF) { return { withSuccessHandler: function (okF) { return runner(okF, ngF); } }; }
   } } };
+  // v3.14 브라우저 구분 ID(처음 1회 무작위 생성) · 사용 환경 요약(사용자 이력 시트용, 개인정보 없음)
+  function devId() {
+    var d = LSG('pnl.did');
+    if (!/^[0-9a-f]{16}$/.test(d)) { var u = new Uint8Array(8); crypto.getRandomValues(u); d = Array.prototype.map.call(u, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); LSS('pnl.did', d); }
+    return d;
+  }
+  function envInfo(prev) {
+    var ua = navigator.userAgent || '', b = /Edg\/(\d+)/.exec(ua) ? '엣지 ' + /Edg\/(\d+)/.exec(ua)[1] : /Chrome\/(\d+)/.exec(ua) ? '크롬 ' + /Chrome\/(\d+)/.exec(ua)[1] : /Firefox\/(\d+)/.exec(ua) ? '파이어폭스 ' + /Firefox\/(\d+)/.exec(ua)[1] : '기타 브라우저';
+    var os = /Windows NT 10/.test(ua) ? 'Windows 10/11' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : '기타 OS';
+    var tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+    return { ua: b + ' · ' + os, scr: (screen.width || 0) + '×' + (screen.height || 0), lang: navigator.language || '', tz: tz, salt: LSG('pnl.salt'), prev: prev || '' };
+  }
   function reset() { S.keys = null; S.keyFor = ''; S.cfg = null; S.cfgFor = ''; S.override = null; S.secErr = ''; S.secOk = false; }
   window.PUBX = { S: S, relay: relay, get: LSG,
     set: function (u, k) { LSS('pnl.url', u); LSS('pnl.key', k); reset(); },
+    rename: function (dev) { var prev = LSG('pnl.dev'); LSS('pnl.dev', dev); return relay('hello', [envInfo(prev)]); },
     relayInfo: function () { return conn().then(function (c) { return c ? maskUrl(c.url) : ''; }, function () { return ''; }); },
     clearAll: function () { ['pnl.url', 'pnl.key', 'pnl.ak', 'pnl.salt', 'pnl.dev'].forEach(function (k) { LSS(k, ''); }); reset(); },
     // 관리자 비밀번호로 연결: cfg.json을 실제로 풀어 본 뒤 파생 키만 저장(비밀번호 자체는 저장하지 않음)
     setAdmin: function (pass, dev) {
+      var prev = LSG('pnl.dev');
       return getCfg().then(function (j) {
         return deriveAk(pass, j.salt, j.iter || 20000).then(function (ak) {
           return akKeys(ak).then(function (K) { return dec(j.sec, K); }).then(function () {
@@ -172,7 +186,7 @@ window.__PUBLIC_VIEWER__ = true;
           }, function () { throw new Error('[2단계·비밀번호] 관리자 비밀번호가 맞지 않습니다(대문자·하이픈 포함 그대로 입력)'); });
         });
       }).then(function () {
-        return relay('hello', []).catch(function (e) { throw new Error('[3단계·중계 연결] ' + String(e && e.message || e)); });
+        return relay('hello', [envInfo(prev)]).catch(function (e) { throw new Error('[3단계·중계 연결] ' + String(e && e.message || e)); });
       });
     } };
 })();
@@ -782,7 +796,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
       <div class="list" id="naturalList"></div>
     </section>
   </main>
-  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.13.1 사내 상황판(깃허브 Pages · n8n 중계 · 사용자 이름·비밀번호 연결)</p>
+  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.14 사내 상황판(깃허브 Pages · n8n 중계 · 사용자 이름·비밀번호 연결)</p>
 </div>
 
 <div class="hist-ov" id="histOv" hidden>
@@ -2256,14 +2270,17 @@ function pubOpenCfg(msg) {
     box.insertBefore(mk('<label for="cfgDev">사용자 이름</label>'), first);
     box.insertBefore(mk('<input id="cfgDev" maxlength="30" autocomplete="name" placeholder="예: 홍길동">'), first);
     box.insertBefore(mk('<label for="cfgPass">비밀번호</label>'), first);
-    box.insertBefore(mk('<input id="cfgPass" type="password" autocomplete="off" placeholder="관리자에게 받은 비밀번호">'), first);
+    var pw = mk('<div class="pw-row" style="display:flex;gap:6px;align-items:stretch"></div>');
+    pw.appendChild(mk('<input id="cfgPass" type="password" autocomplete="off" placeholder="관리자에게 받은 비밀번호" style="flex:1;min-width:0">'));
+    pw.appendChild(mk('<button type="button" class="hbtn" id="cfgPassEye" aria-pressed="false" title="누르면 비밀번호를 잠시 보여 줍니다(10초 뒤 자동으로 가림)" style="flex:none;white-space:nowrap">보기</button>'));
+    box.insertBefore(pw, first);
     var det = mk('<details id="cfgManual" hidden><summary>직접 입력</summary></details>');   /* v3.13.1 화면에서 숨김(두 칸만 입력) */
     box.insertBefore(det, first);
     ['cfgUrl', 'cfgKey'].forEach(function (id) { var inp = $('#' + id), lb = box.querySelector('label[for="' + id + '"]'); det.appendChild(lb); det.appendChild(inp); });
   }
   var ls = box.querySelectorAll('#cfgManual label'); if (ls[0]) ls[0].textContent = '중계 주소 (n8n 웹훅 …/webhook/skb-board-relay)'; if (ls[1]) ls[1].textContent = '상황판 키 (PANEL_KEY)';
   $('#cfgUrl').placeholder = 'https://○○.app.n8n.cloud/webhook/skb-board-relay'; $('#cfgKey').placeholder = 'PANEL_KEY 값'; $('#cfgKey').type = 'password';
-  $('#cfgDev').value = PUBX.get('pnl.dev'); $('#cfgPass').value = '';
+  $('#cfgDev').value = PUBX.get('pnl.dev'); $('#cfgPass').value = ''; pubPassShow(false);
   $('#cfgUrl').value = PUBX.get('pnl.url'); $('#cfgKey').value = PUBX.get('pnl.key');
   $('#cfgManual').open = false;
   $('#cfgSave').textContent = '저장 후 연결 확인';
@@ -2272,6 +2289,15 @@ function pubOpenCfg(msg) {
   if (!msg && PUBX.get('pnl.ak')) PUBX.relayInfo().then(function (h) { if (h && $('#cfgErr').textContent === st) $('#cfgErr').textContent = st + ' · 중계 ' + h; });
   ov.hidden = false;
 }
+// v3.14 비밀번호 보기: 버튼을 누를 때만 보이고 다시 누르거나 10초가 지나면 가림
+var PW_TIMER = null;
+function pubPassShow(on) {
+  var i = $('#cfgPass'), b = $('#cfgPassEye'); if (!i || !b) return;
+  clearTimeout(PW_TIMER);
+  i.type = on ? 'text' : 'password'; b.textContent = on ? '숨기기' : '보기'; b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  if (on) PW_TIMER = setTimeout(function () { pubPassShow(false); }, 10000);
+}
+document.addEventListener('click', function (e) { if (e.target && e.target.id === 'cfgPassEye') pubPassShow($('#cfgPass').type === 'password'); });
 function pubCfgSave() {
   var dev = $('#cfgDev').value.trim(), pass = $('#cfgPass').value.trim(), u = $('#cfgUrl').value.trim(), k = $('#cfgKey').value.trim(), er = $('#cfgErr');
   var done = function (m) { er.className = 'err cfg-ok'; er.textContent = m; setTimeout(function () { $('#cfgOv').hidden = true; }, 1200); load(); };
@@ -2280,7 +2306,8 @@ function pubCfgSave() {
   if (pass) {
     if (!dev) { er.textContent = '사용자 이름을 입력하세요'; return; }
     er.className = 'err'; er.textContent = '연결 확인 중… (처음 1회 몇 초 걸릴 수 있음)';
-    PUBX.setAdmin(pass, dev).then(function () { $('#cfgPass').value = ''; done('연결 완료 — ' + dev); }, fail);
+    pubPassShow(false);
+    PUBX.setAdmin(pass, dev).then(function () { $('#cfgPass').value = ''; done('연결 완료 — ' + dev + ' (승인 기록 저장)'); }, fail);
     return;
   }
   if (u || k) {
@@ -2289,7 +2316,12 @@ function pubCfgSave() {
     PUBX.relay('ping', []).then(function () { done('연결 확인 완료(직접 입력)'); }, fail);
     return;
   }
-  if (dev && PUBX.get('pnl.ak')) { try { localStorage.setItem('pnl.dev', dev); } catch (e) {} done('사용자 이름을 바꿨습니다 — ' + dev); return; }
+  if (dev && PUBX.get('pnl.ak')) {
+    if (dev === PUBX.get('pnl.dev')) { done('변경 사항 없음 — ' + dev); return; }
+    er.className = 'err'; er.textContent = '이름 변경 기록 중…';
+    PUBX.rename(dev).then(function () { done('사용자 이름을 바꿨습니다 — ' + dev + ' (기록 저장)'); }, fail);
+    return;
+  }
   er.textContent = '비밀번호를 입력하세요';
 }
 
