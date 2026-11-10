@@ -4,8 +4,116 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>ch Btv 재난특보 상황판 (보기 전용)</title>
-<script>window.__LOCAL_VIEWER__ = true; window.__PUBLIC_VIEWER__ = true;</script>
+<title>ch Btv 재난특보 상황판 (사내)</title>
+<script>
+/* v3.11 사내 상황판(깃허브 Pages) — Apps Script 화면과 같은 코드를 쓰기 위한 google.script.run 대체
+ *  · 자료 조회: 같은 주소의 data.json(10분 게시) — n8n 실행 횟수 사용 안 함
+ *  · 통보현황·해제 메모: data.json 안의 암호화 자료를 상황판 키로 해독(키 입력한 화면만)
+ *  · 동작(통보·해제·사후확인·지금 수집·이력·관제영상 키): n8n 중계 웹훅 → Apps Script doPost (요청 서명, 응답 암호화) */
+window.__PUBLIC_VIEWER__ = true;
+(function () {
+  var LSG = function (k) { try { return localStorage.getItem(k) || ''; } catch (e) { return (window.__PMEM || {})[k] || ''; } };
+  var LSS = function (k, v) { window.__PMEM = window.__PMEM || {}; window.__PMEM[k] = v; try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) {} };
+  var S = { data: null, at: 0, keys: null, keyFor: '', override: null, liveUntil: 0, liveAt: 0, liveDash: null, secOk: false, secErr: '' };
+  var te = function (s) { return new TextEncoder().encode(s); };
+  var b64d = function (s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+  var cat = function (a, b) { var u = new Uint8Array(a.length + b.length); u.set(a, 0); u.set(b, a.length); return u; };
+  var hex = function (buf) { return Array.prototype.map.call(new Uint8Array(buf), function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); };
+  var imp = function (raw, use) { return crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, use); };
+  var clone = function (o) { return JSON.parse(JSON.stringify(o)); };
+  function keys() {
+    var pass = LSG('pnl.key');
+    if (!pass) return Promise.resolve(null);
+    if (!(window.crypto && crypto.subtle)) return Promise.reject(new Error('이 브라우저는 암호 기능을 지원하지 않습니다'));
+    if (S.keys && S.keyFor === pass) return Promise.resolve(S.keys);
+    return imp(te(pass), ['sign']).then(function (k) { return Promise.all(['enc', 'mac', 'auth'].map(function (w) { return crypto.subtle.sign('HMAC', k, te(w)); })); })
+      .then(function (r) { return Promise.all([imp(r[0], ['sign']), imp(r[1], ['sign', 'verify']), imp(r[2], ['sign'])]); })
+      .then(function (k3) { S.keys = { enc: k3[0], mac: k3[1], auth: k3[2] }; S.keyFor = pass; return S.keys; });
+  }
+  function dec(sec, K) {
+    var n = b64d(sec.n), c = b64d(sec.c), t = b64d(sec.t);
+    return crypto.subtle.verify('HMAC', K.mac, t, cat(n, c)).then(function (ok) {
+      if (!ok) throw new Error('상황판 키 불일치');
+      var jobs = [];
+      for (var i = 0; i * 32 < c.length; i++) jobs.push(crypto.subtle.sign('HMAC', K.enc, cat(n, new Uint8Array([i >>> 24 & 255, i >>> 16 & 255, i >>> 8 & 255, i & 255]))));
+      return Promise.all(jobs);
+    }).then(function (ks) {
+      var u = ks.map(function (b) { return new Uint8Array(b); }), p = new Uint8Array(c.length);
+      for (var i = 0; i < c.length; i++) p[i] = c[i] ^ u[i >> 5][i & 31];
+      if (typeof DecompressionStream === 'undefined') throw new Error('브라우저가 오래되어 해독할 수 없습니다(크롬·엣지 최신 버전 필요)');
+      return new Response(new Blob([p]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    }).then(function (txt) { return JSON.parse(txt); });
+  }
+  function getData() {
+    return fetch('data.json?t=' + Math.floor(Date.now() / 30000), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('자료 파일 HTTP ' + r.status); return r.json(); })
+      .then(function (j) { S.data = j; S.at = Date.now(); return j; });
+  }
+  function dashFrom(j) {
+    var d = clone(j.dash); d.meta.publishedAt = j.publishedAt || d.meta.now;
+    return keys().then(function (K) {
+      if (!K) { S.secOk = false; S.secErr = ''; return d; }
+      if (!j.sec) { S.secOk = false; S.secErr = '서버에 PANEL_KEY 없음'; return d; }
+      return dec(j.sec, K).then(function (x) {
+        d.notify = x.notify || null;
+        (d.events || []).forEach(function (e) { if (e.manual && x.memo && x.memo[e.id]) e.manual.memo = x.memo[e.id]; });
+        d.viewer = { email: '', approver: true }; S.secOk = true; S.secErr = ''; return d;
+      }, function (err) { S.secOk = false; S.secErr = String(err && err.message || err); return d; });
+    }, function (err) { S.secOk = false; S.secErr = String(err && err.message || err); return d; });
+  }
+  function prep(d) { d.meta.publishedAt = d.meta.publishedAt || d.meta.now; d.viewer = { email: '', approver: true }; return d; }
+  function relay(op, args) {
+    var url = LSG('pnl.url');
+    if (!url) return Promise.reject(new Error('연결 설정 필요 — 상단 「연결 설정」에 중계 주소와 상황판 키를 입력하세요'));
+    return keys().then(function (K) {
+      if (!K) throw new Error('연결 설정 필요 — 상황판 키 미입력');
+      var ts = Date.now(), p = JSON.stringify(args || []);
+      return crypto.subtle.sign('HMAC', K.auth, te(op + '\n' + ts + '\n' + p)).then(function (sig) {
+        return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: op, ts: ts, p: p, sig: hex(sig) }) });
+      }).then(function (r) { if (!r.ok) throw new Error('중계 응답 HTTP ' + r.status); return r.json(); })
+        .then(function (j) { if (Array.isArray(j)) j = j[0]; if (!j || j.ok === false) throw new Error((j && j.error) || '중계 응답 오류'); return j.e ? dec(j.e, K) : j; });
+    });
+  }
+  function getDash() {
+    if (Date.now() < S.liveUntil) {          // 지금 수집 직후 약 2분 30초: 시트를 중계로 직접 조회(20초 간격)
+      if (S.liveDash && Date.now() - S.liveAt < 20000) return Promise.resolve(clone(S.liveDash));
+      return relay('dash', []).then(function (x) { S.liveDash = prep(x.dash); S.liveAt = Date.now(); S.secOk = true; return clone(S.liveDash); });
+    }
+    return getData().then(function (j) {
+      if (S.override && Date.now() - S.override.after < 300000 && new Date(j.publishedAt || 0).getTime() < S.override.after) return clone(S.override.dash);
+      S.override = null; return dashFrom(j);
+    });
+  }
+  function runner(okF, ngF) {
+    var ok = okF || function () {}, ng = ngF || function (e) { console.error(e); };
+    function act(op) {
+      return function () {
+        var args = Array.prototype.slice.call(arguments);
+        relay(op, args).then(function (x) {
+          if (x.dash) S.override = { dash: prep(x.dash), after: Date.now() };
+          if (op === 'collect' && x.res && x.res.ok) S.liveUntil = Date.now() + 150000;
+          ok(x.res);
+        }, ng);
+      };
+    }
+    return {
+      getDashboardData: function () { getDash().then(ok, ng); },
+      getSourceHistory: function (src) { (S.data && Date.now() - S.at < 60000 ? Promise.resolve(S.data) : getData()).then(function (j) { ok((j.srchist && j.srchist[src]) || { events: [] }); }, ng); },
+      getHistory: function (ymd) { relay('history', [ymd]).then(ok, ng); },
+      requestNotify: act('notify'), requestRelease: act('release'), requestUnrelease: act('unrelease'),
+      requestDeleteOrders: act('deleteOrders'), requestPostcheck: act('postcheck'), requestCollect: act('collect'),
+      getCctvKey: function () { relay('cctvKey', []).then(function (x) { ok(x.key || ''); }, ng); },
+      getHrfcoKey: function () { /* 하천 수위 직접 조회는 개인 PC 상황판에서만 수행 — 응답하지 않음 */ },
+      recordFlood: function () {}
+    };
+  }
+  window.google = { script: { run: {
+    withSuccessHandler: function (okF) { return { withFailureHandler: function (ngF) { return runner(okF, ngF); } }; },
+    withFailureHandler: function (ngF) { return { withSuccessHandler: function (okF) { return runner(okF, ngF); } }; }
+  } } };
+  window.PUBX = { S: S, relay: relay, get: LSG, set: function (u, k) { LSS('pnl.url', u); LSS('pnl.key', k); S.keys = null; S.keyFor = ''; S.override = null; S.secErr = ''; } };
+})();
+</script>
 </head>
 <body>
 <script>/* v3.7.5 오류 알림줄(관제영상 연결 실패는 영상 창 안에만 표시): 화면 맨 아래 한 줄(흐르는 글자)로 상시 표시, 같은 오류는 횟수로 묶음 */
@@ -93,7 +201,8 @@ button{font:inherit;color:inherit}
 .cfg-btn.toggle{display:none}
 body.local .cfg-btn.toggle{display:inline-flex}
 body.local .actionbar .act{display:none}
-body.pub #histBtn,body.pub #cfgBtn,body.pub #collectBtn{display:none!important}
+body.pub .cfg-btn.toggle{display:inline-flex}
+.cfg-ok{color:var(--ok)}
 .cfg-ov{position:fixed;inset:0;z-index:70;background:rgba(5,8,11,.78);display:flex;align-items:center;justify-content:center;padding:16px}
 .cfg-ov[hidden]{display:none}
 .cfg{width:min(520px,100%);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:18px;display:flex;flex-direction:column;gap:10px}
@@ -595,7 +704,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
       <div class="list" id="naturalList"></div>
     </section>
   </main>
-  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.10 사내 보기 전용(GitHub Pages · 공개 재난정보만)</p>
+  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.11 사내 상황판(깃허브 Pages · n8n 중계)</p>
 </div>
 
 <div class="hist-ov" id="histOv" hidden>
@@ -739,28 +848,7 @@ const LOCAL = typeof window !== 'undefined' && window.__LOCAL_VIEWER__ === true;
 const MEM = {};
 const LS = { get: k => { try { return localStorage.getItem(k) || MEM[k] || ''; } catch (e) { return MEM[k] || ''; } },
              set: (k, v) => { MEM[k] = v; try { localStorage.setItem(k, v); } catch (e) {} } };
-
-// v3.10 사내 보기 전용(GitHub Pages): 같은 주소의 data.json(Apps Script가 10분마다 게시하는 공개 재난정보)을 읽음
-var PUB = { data: null, at: 0 };
-function pubGet(params) {
-  var v = params && params.view;
-  if (v === 'history') return Promise.reject(new Error('사내 보기 전용 상황판에서는 날짜별 이력 보기를 제공하지 않습니다 — 7일 이력 버튼을 이용하세요'));
-  var p = (v === 'srchist' && PUB.data && Date.now() - PUB.at < 60000) ? Promise.resolve(PUB.data)
-    : fetch('data.json?t=' + Math.floor(Date.now() / 30000), { cache: 'no-store' })
-        .then(function (r) { if (!r.ok) throw new Error('자료 파일 HTTP ' + r.status); return r.json(); })
-        .then(function (j) { PUB.data = j; PUB.at = Date.now(); return j; });
-  return p.then(function (j) {
-    if (v === 'srchist') return (j.srchist && j.srchist[params.src]) || { events: [] };
-    var d = JSON.parse(JSON.stringify(j.dash)); d.meta.publishedAt = j.publishedAt || d.meta.now; return d;
-  });
-}
-function viewFlag(d) {
-  if (!window.__PUBLIC_VIEWER__) return '로컬 뷰어 · 보기 전용';
-  var pa = d && d.meta && (d.meta.publishedAt || d.meta.now), m = pa ? Math.round((Date.now() - new Date(pa)) / 60000) : null;
-  return m !== null && m > 40 ? '사내 보기 전용 · 자료 게시 지연 ' + m + '분 (마지막 ' + hm(pa) + ')' : '사내 보기 전용 · 공개 재난정보' + (pa ? ' (게시 ' + hm(pa) + ')' : '');
-}
 function localGet(params){
-  if (window.__PUBLIC_VIEWER__) return pubGet(params);
   const url = LS.get('dash.url'), key = LS.get('dash.key');
   if (!url || !key) return Promise.reject(new Error('NOCONFIG'));
   const q = new URLSearchParams(Object.assign({}, params, { key: key, t: Date.now() }));
@@ -963,7 +1051,7 @@ function render(){
   const pb = $('#preBtn'); pb.hidden = !preN; pb.textContent = '예비특보 ' + preN; pb.setAttribute('aria-pressed', state.preFocus && preN ? 'true' : 'false');
   if (!preN) state.preFocus = false;
   const sel = D.events.find(e=>e.id===state.selected);
-  $('#selInfo').innerHTML = sel ? `<span>선택:</span> <b>${esc(sel.title)}</b> <span>· ${esc(zonesOf(sel).join(', ')||'권역 외')}</span>` : (LOCAL ? '<span>보기 전용 · 통보·해제·관제영상은 개인 PC·휴대폰 상황판에서 처리합니다.</span>' : '<span>카드를 선택하면 가공 메뉴 대상이 됩니다.</span>');
+  $('#selInfo').innerHTML = sel ? `<span>선택:</span> <b>${esc(sel.title)}</b> <span>· ${esc(zonesOf(sel).join(', ')||'권역 외')}</span>` : (LOCAL ? '<span>로컬 뷰어(보기 전용) · 통보·사후확인은 휴대폰 상황판에서 처리합니다.</span>' : '<span>카드를 선택하면 가공 메뉴 대상이 됩니다.</span>');
   renderNotifyUI(sel);
 }
 
@@ -2006,7 +2094,7 @@ function tick(){
   if (state.lastYmd && state.lastYmd !== today) { toast('날짜가 바뀌었습니다 — 어제 해제된 건은 화면에서 정리됩니다', 10000); left = 1; }
   state.lastYmd = today;
   left = left<=1 ? (load(), REFRESH_SEC) : left-1;
-  $('#clockSub').innerHTML = `${LIVE?'최종 조회':'샘플 기준'} <b>${state.data?hms(state.data.meta.now):''}</b> · 화면 갱신 ${left}초 · 다음 자동 수집 <b>${nextRun(n)}</b>${COL.reqAt?` · <b style="color:var(--accent)">수동 수집 반영 대기</b>`:''}<span class="hide-m"> · 해제 건 표시: ${md(n)}(${wd(n)}) 24:00까지</span>`;
+  $('#clockSub').innerHTML = `${window.__PUBLIC_VIEWER__?'자료 기준':LIVE?'최종 조회':'샘플 기준'} <b>${state.data?hms(state.data.meta.now):''}</b> · 화면 갱신 ${left}초 · 다음 자동 수집 <b>${nextRun(n)}</b>${COL.reqAt?` · <b style="color:var(--accent)">수동 수집 반영 대기</b>`:''}<span class="hide-m"> · 해제 건 표시: ${md(n)}(${wd(n)}) 24:00까지</span>`;
   updCollectBtn();
 }
 let toastTimer = null;
@@ -2015,7 +2103,7 @@ function setFlag(t){ const f=$('#modeFlag'); f.hidden = !t; f.textContent = t ||
 // v3.1.1: 성공 시 오류 표시 해제, 1회 실패는 5초 뒤 자동 재시도(표시 없음), 연속 2회 실패부터 표시(원인 문구 포함)
 var failCount = 0, loading = false;
 function load(){ if (loading) return Promise.resolve(); loading = true;
-  return DataSource.fetch().then(d=>{ loading = false; failCount = 0; const fresh = detectNew(d); state.data=d; setFlag(LOCAL ? viewFlag(d) : ''); checkCollected(d); announce(fresh); render(); fldStart(); }).catch(err=>{
+  return DataSource.fetch().then(d=>{ loading = false; failCount = 0; const fresh = detectNew(d); state.data=d; setFlag(viewFlag(d)); checkCollected(d); announce(fresh); render(); fldStart(); }).catch(err=>{
   loading = false; failCount++;
   const m = String(err && err.message || err);
   console.error('[상황판 조회 실패 ' + failCount + '회]', err);
@@ -2027,7 +2115,39 @@ function load(){ if (loading) return Promise.resolve(); loading = true;
 document.addEventListener('visibilitychange', () => { if (!document.hidden && LIVE && state.data) load(); });
 
 /* 로컬 뷰어 연결 설정 */
+
+// v3.11 사내 상황판(깃허브) 상단 표시·연결 설정
+function viewFlag(d) {
+  if (!window.__PUBLIC_VIEWER__) return LOCAL ? '로컬 뷰어 · 보기 전용' : '';
+  var S = (window.PUBX || {}).S || {}, pa = d && d.meta && (d.meta.publishedAt || d.meta.now);
+  var m = pa ? Math.round((Date.now() - new Date(pa)) / 60000) : null;
+  var who = S.secOk ? '사내 상황판 · 승인자 연결' : S.secErr ? '사내 상황판 · ' + S.secErr + ' — 연결 설정 확인' : '사내 상황판 · 보기 전용(연결 설정 시 통보 가능)';
+  return who + (m !== null && m > 40 ? ' · 자료 게시 지연 ' + m + '분' : pa ? ' · 게시 ' + hm(pa) : '');
+}
+function pubOpenCfg(msg) {
+  $('#cfgTitle').textContent = '사내 상황판 연결 설정';
+  $('#cfgOv').querySelector('p').textContent = '중계 주소(n8n 웹훅)와 상황판 키를 입력하면 이 PC 브라우저에만 저장되어 통보·해제·이력 보기·지금 수집·관제영상·통보현황을 쓸 수 있습니다. 두 칸을 비우고 저장하면 보기 전용으로 돌아갑니다. 여러 사람이 쓰는 PC에서는 사용 후 비워 두세요.';
+  var ls = $('#cfgOv').querySelectorAll('label'); if (ls[0]) ls[0].textContent = '중계 주소 (n8n 웹훅 …/webhook/skb-board-relay)'; if (ls[1]) ls[1].textContent = '상황판 키 (Apps Script makePanelKey로 만든 값)';
+  $('#cfgUrl').placeholder = 'https://○○.app.n8n.cloud/webhook/skb-board-relay'; $('#cfgKey').placeholder = 'PANEL_KEY 값'; $('#cfgKey').type = 'password';
+  $('#cfgUrl').value = PUBX.get('pnl.url'); $('#cfgKey').value = PUBX.get('pnl.key');
+  $('#cfgSave').textContent = '저장 후 연결 확인';
+  $('#cfgErr').className = 'err'; $('#cfgErr').textContent = msg || '';
+  $('#cfgOv').hidden = false;
+}
+function pubCfgSave() {
+  var u = $('#cfgUrl').value.trim(), k = $('#cfgKey').value.trim(), er = $('#cfgErr');
+  if (u && !/^https:\/\/[^\s]+$/.test(u)) { er.textContent = '중계 주소는 https:// 로 시작해야 합니다'; return; }
+  PUBX.set(u, k);
+  if (!u && !k) { er.textContent = ''; $('#cfgOv').hidden = true; toast('연결 정보를 지웠습니다 — 보기 전용으로 전환', 5000); load(); return; }
+  if (!u || !k) { er.textContent = '중계 주소와 상황판 키를 모두 입력하세요'; return; }
+  er.className = 'err'; er.textContent = '연결 확인 중…';
+  PUBX.relay('ping', []).then(function () {
+    er.className = 'err cfg-ok'; er.textContent = '연결 확인 완료 — 승인자 기능을 사용할 수 있습니다';
+    setTimeout(function () { $('#cfgOv').hidden = true; }, 1200); load();
+  }, function (err) { er.className = 'err'; er.textContent = '연결 실패: ' + String(err && err.message || err); });
+}
 function openCfg(msg){
+  if (window.__PUBLIC_VIEWER__) return pubOpenCfg(msg);
   $('#cfgUrl').value = LS.get('dash.url'); $('#cfgKey').value = LS.get('dash.key');
   $('#cfgErr').textContent = !msg || msg === 'NOCONFIG' ? '' : '연결 실패: ' + msg;
   $('#cfgOv').hidden = false;
@@ -2035,6 +2155,7 @@ function openCfg(msg){
 document.addEventListener('click', e=>{
   if (e.target.id === 'cfgBtn') openCfg('');
   else if (e.target.id === 'cfgCancel') $('#cfgOv').hidden = true;
+  else if (e.target.id === 'cfgSave' && window.__PUBLIC_VIEWER__) pubCfgSave();
   else if (e.target.id === 'cfgSave') {
     LS.set('dash.url', $('#cfgUrl').value.trim()); LS.set('dash.key', $('#cfgKey').value.trim());
     $('#cfgErr').textContent = '연결 확인 중…';
@@ -2047,7 +2168,7 @@ function start(d){
   detectNew(d); updSoundBtn();
   state.data = d;
   if (!LIVE) setFlag('샘플 데이터');
-  if (LOCAL) setFlag(viewFlag(d));
+  if (LOCAL || window.__PUBLIC_VIEWER__) setFlag(viewFlag(d));
   if (!started) {
     started = true;
     maps.social = createMap('social');
@@ -2056,7 +2177,8 @@ function start(d){
   } else render();
   fldStart();   // v3.8 승인자 화면: 하천 수위 10분 주기 조회
 }
-if (LOCAL) { document.body.classList.add('local'); if (window.__PUBLIC_VIEWER__) document.body.classList.add('pub'); $('#selInfo').innerHTML = '<span>보기 전용 · 통보·해제·관제영상은 개인 PC·휴대폰 상황판에서 처리합니다.</span>'; }
+if (window.__PUBLIC_VIEWER__) document.body.classList.add('pub');
+if (LOCAL) { document.body.classList.add('local'); $('#selInfo').innerHTML = '<span>로컬 뷰어(보기 전용) · 통보·사후확인은 휴대폰 상황판에서 처리합니다.</span>'; }
 DataSource.fetch().then(start).catch(err => { if (window.__PUBLIC_VIEWER__) { setFlag('자료 불러오기 실패 — 1분 뒤 다시 시도 · ' + String(err && err.message || err).slice(0, 40)); setTimeout(() => location.reload(), 60000); } else if (LOCAL) openCfg(String(err && err.message || err)); else console.error(err); });
 </script>
 
