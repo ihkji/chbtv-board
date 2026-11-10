@@ -202,6 +202,7 @@ button{font:inherit;color:inherit}
 body.local .cfg-btn.toggle{display:inline-flex}
 body.local .actionbar .act{display:none}
 body.pub .cfg-btn.toggle{display:inline-flex}
+body.demo .cfg-btn.toggle{display:none!important}
 .cfg-ok{color:var(--ok)}
 .cfg-ov{position:fixed;inset:0;z-index:70;background:rgba(5,8,11,.78);display:flex;align-items:center;justify-content:center;padding:16px}
 .cfg-ov[hidden]{display:none}
@@ -561,6 +562,20 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
 .cam-none{border:1px dashed var(--line);border-radius:6px;padding:12px 14px;font-size:13px;line-height:1.6}
 .cam-none b{color:var(--mid)}
 
+
+/* v3.12 관제영상: 칸 선택 교체·확대 */
+#camOv .cam-stage{cursor:zoom-in}
+#camOv .cam-tile.bad .cam-stage,#camOv .cam-tile.empty .cam-stage{cursor:pointer}
+#camOv .cam-tile.sel .cam-stage{outline:3px solid var(--accent);outline-offset:-3px}
+#camOv .cam-tile.bad .cam-stage{border-color:rgba(179,38,30,.7)}
+.cam-swap{margin-left:auto;font:inherit;font-size:11px;line-height:1.4;padding:1px 7px;border:1px solid var(--line);border-radius:3px;background:transparent;color:var(--muted);cursor:pointer;flex:none}
+.cam-swap:hover,.cam-tile.bad .cam-swap,.cam-tile.sel .cam-swap{color:var(--fg);border-color:var(--accent)}
+.cam-grid.zoom{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.cam-grid.zoom .cam-tile{display:none}
+.cam-grid.zoom .cam-tile.zoomed{display:flex;min-height:0}
+.cam-grid.zoom .cam-tile.zoomed .cam-stage{aspect-ratio:auto;flex:1;min-height:0;cursor:zoom-out}
+.cam-grid.zoom .cam-tile.zoomed video,.cam-grid.zoom .cam-tile.zoomed img{width:100%;height:100%;object-fit:contain}
+
 /* ===== 휴대폰·좁은 화면 (5-2) ===== */
 @media (max-width:760px){
   body{padding-inline:10px;padding-block:8px 76px;font-size:14px}
@@ -704,7 +719,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
       <div class="list" id="naturalList"></div>
     </section>
   </main>
-  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.11 사내 상황판(깃허브 Pages · n8n 중계)</p>
+  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.12 사내 상황판(깃허브 Pages · n8n 중계)</p>
 </div>
 
 <div class="hist-ov" id="histOv" hidden>
@@ -1722,7 +1737,7 @@ function itsFetch(box){
 }
 function camTileHtml(k){
   return '<div class="cam-tile" data-slot="' + k + '"><div class="cam-stage"><video muted playsinline autoplay></video><img alt="" hidden><div class="cam-msg">대기 중…</div></div>' +
-    '<div class="cam-tcap"><span class="cam-slot">' + (k + 1) + '</span><b></b><span class="cam-tinfo"></span></div></div>';
+    '<div class="cam-tcap"><span class="cam-slot">' + (k + 1) + '</span><b></b><span class="cam-tinfo"></span><button type="button" class="cam-swap" data-swap="' + k + '" title="이 칸을 오른쪽 목록의 다른 CCTV로 교체">교체</button></div></div>';
 }
 function camEmpty(k, text){
   var box = camBox(k); if (!box) return;
@@ -1731,7 +1746,7 @@ function camEmpty(k, text){
 }
 function camPlaySlot(k, i){
   var it = CAM.items[i], box = camBox(k); if (!it || !box) return;
-  camStopSlot(k); CAM.tiles[k] = i; box.classList.remove('empty');
+  camStopSlot(k); CAM.tiles[k] = i; box.classList.remove('empty'); box.classList.remove('bad');
   document.querySelectorAll('.cam-item').forEach(function(b){ b.setAttribute('aria-pressed', CAM.tiles.indexOf(+b.dataset.cam) >= 0); });
   box.querySelector('.cam-tcap b').textContent = it.name;
   box.querySelector('.cam-tinfo').textContent = roadName(it.road) + ' · ' + it.km + 'km';
@@ -1744,8 +1759,8 @@ function camPlaySlot(k, i){
     tick(); CAM.timers[k] = setInterval(tick, 5000); msg.textContent = '정지영상 · 5초마다 갱신'; return;
   }
   img.hidden = true; v.hidden = false; msg.textContent = '영상 연결 중…';
-  var fail = function(why){ if (CAM.tiles[k] !== i) return; msg.textContent = '재생 불가(' + why + ') · 오른쪽 목록에서 다른 CCTV 선택'; };
-  v.onplaying = function(){ if (CAM.tiles[k] === i) msg.textContent = ''; };
+  var fail = function(why){ if (CAM.tiles[k] !== i) return; box.classList.add('bad'); msg.textContent = '재생 불가(' + why + ') · 이 칸을 누른 뒤 오른쪽 목록에서 다른 CCTV 선택'; };
+  v.onplaying = function(){ if (CAM.tiles[k] === i) { msg.textContent = ''; box.classList.remove('bad'); } };
   if (v.canPlayType('application/vnd.apple.mpegurl')) { v.src = it.url; v.play().catch(function(){}); setTimeout(function(){ if (CAM.tiles[k] === i && v.readyState < 2) fail('응답 없음'); }, 12000); return; }
   loadHls().then(function(){
     if (CAM.tiles[k] !== i) return;
@@ -1770,7 +1785,7 @@ function camKm(a, cx, cy){
 function openCam(){
   var ev = state.data && state.data.events.find(function(e){ return e.id === state.selected; }); if (!ev) return;
   var fs = FEATS.filter(function(f){ return (ev.areaCodes || []).indexOf(f.properties.code) >= 0; }); if (!fs.length) return;
-  camStop(); CAM.ev = ev; CAM.items = []; CAM.tiles = []; CAM.next = 0; CAM_ERR = {};
+  camStop(); CAM.ev = ev; CAM.items = []; CAM.tiles = []; CAM.next = 0; CAM_ERR = {}; CAM.sel = null; CAM.zoom = null;
   var fc = { type:'FeatureCollection', features: fs };
   var b = d3.geoBounds(fc), c = d3.geoCentroid(fc);
   var x0 = b[0][0], y0 = b[0][1], x1 = b[1][0], y1 = b[1][1], cx = c[0], cy = c[1];
@@ -1793,7 +1808,8 @@ function openCam(){
       return;
     }
     var ex = CAM.items.filter(function(x){ return x.road === 'ex'; }).length, its = CAM.items.length - ex;
-    $('#camSideH').textContent = '가까운 순 ' + CAM.items.length + '대 (고속도로 ' + ex + ' · 국도 ' + its + ') · 눌러서 화면 교체';
+    CAM.head = '가까운 순 ' + CAM.items.length + '대 (고속도로 ' + ex + ' · 국도 ' + its + ') · 칸을 누르면 확대 · 재생 안 되는 칸은 누른 뒤 목록에서 교체';
+    $('#camSideH').textContent = CAM.head;
     $('#camList').innerHTML = CAM.items.map(function(it, i){
         return '<button type="button" class="cam-item" data-cam="' + i + '" aria-pressed="false"><b>' + esc(it.name) + '</b><span>' + roadName(it.road) + ' · ' + it.km + 'km</span></button>';
       }).join('') +
@@ -1815,12 +1831,53 @@ window.__camErr = function(h){
   var parts = Object.keys(CAM_ERR).map(function(k){ return k + ' ×' + CAM_ERR[k]; });
   el.textContent = '영상 연결 실패 ' + parts.join(', ') + ' · 해당 칸은 목록에서 다른 CCTV로 바꿔 보세요';
 };
-function closeCam(){ camStop(); CAM.ev = null; CAM_ERR = {}; $('#camOv').hidden = true; }
+/* v3.12 칸 선택 교체·확대: 재생 안 되는 칸(또는 '교체' 버튼)을 누르면 그 칸이 교체 대상 → 목록에서 고른 CCTV로 그 칸만 바꿈
+   재생 중인 칸을 누르면 그 CCTV만 크게 보기(다시 누르면 4분할로) */
+function camSelect(k){
+  CAM.sel = (k === null || CAM.sel === k) ? null : k;
+  document.querySelectorAll('#camOv .cam-tile').forEach(function(t){ t.classList.toggle('sel', +t.dataset.slot === CAM.sel); });
+  var hd = $('#camSideH'); if (hd) hd.textContent = CAM.sel === null ? (CAM.head || '') : (CAM.sel + 1) + '번 칸 교체 — 오른쪽 목록에서 바꿀 CCTV를 고르세요 (같은 칸을 다시 누르면 취소)';
+}
+function camZoom(k){
+  var g = document.querySelector('#camOv .cam-grid'); if (!g) return;
+  if (CAM.zoom === k || k === null) {
+    CAM.zoom = null; g.classList.remove('zoom'); g.style.height = '';
+    g.querySelectorAll('.cam-tile').forEach(function(t){ t.classList.remove('zoomed'); });
+    return;
+  }
+  if (CAM.zoom === null) g.style.height = g.offsetHeight + 'px';   /* 4분할일 때 높이 그대로 한 칸을 크게 */
+  CAM.zoom = k; g.classList.add('zoom');
+  g.querySelectorAll('.cam-tile').forEach(function(t){ t.classList.toggle('zoomed', +t.dataset.slot === k); });
+}
+function camFirstBad(){
+  for (var k = 0; k < CAM_N; k++) { var b = camBox(k); if (b && (b.classList.contains('bad') || b.classList.contains('empty'))) return k; }
+  return null;
+}
+function closeCam(){ camStop(); CAM.ev = null; CAM_ERR = {}; CAM.sel = null; CAM.zoom = null; $('#camOv').hidden = true; }
 document.addEventListener('click', function(e){
   if (e.target.closest('#actCctv')) { openCam(); return; }
   if (e.target.id === 'camClose') { closeCam(); return; }
+  var sw = e.target.closest('#camOv [data-swap]');
+  if (sw) { camSelect(+sw.dataset.swap); return; }
+  var stg = e.target.closest('#camOv .cam-stage');
+  if (stg) {
+    var tl = stg.closest('.cam-tile'), sk = +tl.dataset.slot;
+    if (CAM.zoom === sk) camZoom(null);                         /* 크게 보기 중이면 다시 4분할 */
+    else if (tl.classList.contains('bad') || tl.classList.contains('empty')) camSelect(sk); else camZoom(sk);
+    return;
+  }
   var ci = e.target.closest('[data-cam]');
-  if (ci) { var i = +ci.dataset.cam; if (CAM.tiles.indexOf(i) >= 0) return; var k = CAM.next; CAM.next = (k + 1) % CAM_N; camPlaySlot(k, i); return; }
+  if (ci) {
+    var i = +ci.dataset.cam;
+    var k = CAM.sel !== null ? CAM.sel : CAM.zoom !== null ? CAM.zoom : camFirstBad();
+    if (k === null) { if (CAM.tiles.indexOf(i) >= 0) return; k = CAM.next; CAM.next = (k + 1) % CAM_N; }
+    if (CAM.tiles[k] === i) { camSelect(null); return; }
+    var j = CAM.tiles.indexOf(i);                               /* 다른 칸에서 재생 중이면 두 칸을 맞바꿈 */
+    var old = CAM.tiles[k];
+    camSelect(null); camPlaySlot(k, i);
+    if (j >= 0 && j !== k && old !== undefined && old !== null) camPlaySlot(j, old);
+    return;
+  }
 });
 
 /* ===== 15. v3.8 홍수(하천 수위) 감시 — 상황판 화면 중계(B안) ===== */
@@ -1978,8 +2035,9 @@ function fldPoll() {
     if (m !== 'NOGAS') fldRun('recordFlood', { ok: false, error: m, watch: watch.length }).catch(function () {});
   });
 }
+var FLD_ENABLED = false;   // v3.12 하천 수위 감시 운영 중지(서버 FLOOD_ON과 함께 바꿈)
 function fldStart() {
-  if (FLD.started || LOCAL) return;
+  if (!FLD_ENABLED || FLD.started || LOCAL) return;
   if (!(state.data && state.data.viewer && state.data.viewer.approver)) return;   // 승인자 화면만 조회
   FLD.started = true;
   fldRun('getHrfcoKey').then(function (k) {
@@ -2018,7 +2076,7 @@ function floodChip(s) {
 /* ===== 16. v3.9 API 수신 항목별 최근 7일 이력 (방송권역 해당 건만) ===== */
 // ※ HtmlService 변환 오류 방지: 이 절은 백틱·정규식 슬래시·거듭제곱 연산자를 쓰지 않음
 var SH = { src: '', data: null, loading: false };
-var SH_NAME = { safety: '긴급재난문자', wrn: '기상특보', eqk: '지진통보', flood: '하천수위' };
+var SH_NAME = { safety: '긴급재난문자', wrn: '기상특보', eqk: '지진통보' };   // v3.12 하천수위 제외
 function srcWrap(s, chip) {
   if (!SH_NAME[s.key]) return chip;
   return '<span class="srcwrap">' + chip + '<button type="button" class="srcHist" data-src="' + esc(s.key) + '" aria-label="' + esc(s.name) + ' 최근 7일 이력">7일 이력</button></span>';
@@ -2115,11 +2173,11 @@ function load(){ if (loading) return Promise.resolve(); loading = true;
 document.addEventListener('visibilitychange', () => { if (!document.hidden && LIVE && state.data) load(); });
 
 /* 로컬 뷰어 연결 설정 */
-
 // v3.11 사내 상황판(깃허브) 상단 표시·연결 설정
 function viewFlag(d) {
   if (!window.__PUBLIC_VIEWER__) return LOCAL ? '로컬 뷰어 · 보기 전용' : '';
   var S = (window.PUBX || {}).S || {}, pa = d && d.meta && (d.meta.publishedAt || d.meta.now);
+  if (window.__DEMO__) { var mm = pa ? Math.round((Date.now() - new Date(pa)) / 60000) : null; return '시연 버전 · 공개 재난정보' + (mm !== null && mm > 40 ? ' · 자료 게시 지연 ' + mm + '분' : pa ? ' · 게시 ' + hm(pa) : ''); }
   var m = pa ? Math.round((Date.now() - new Date(pa)) / 60000) : null;
   var who = S.secOk ? '사내 상황판 · 승인자 연결' : S.secErr ? '사내 상황판 · ' + S.secErr + ' — 연결 설정 확인' : '사내 상황판 · 보기 전용(연결 설정 시 통보 가능)';
   return who + (m !== null && m > 40 ? ' · 자료 게시 지연 ' + m + '분' : pa ? ' · 게시 ' + hm(pa) : '');
@@ -2178,6 +2236,7 @@ function start(d){
   fldStart();   // v3.8 승인자 화면: 하천 수위 10분 주기 조회
 }
 if (window.__PUBLIC_VIEWER__) document.body.classList.add('pub');
+if (window.__DEMO__) document.body.classList.add('demo');
 if (LOCAL) { document.body.classList.add('local'); $('#selInfo').innerHTML = '<span>로컬 뷰어(보기 전용) · 통보·사후확인은 휴대폰 상황판에서 처리합니다.</span>'; }
 DataSource.fetch().then(start).catch(err => { if (window.__PUBLIC_VIEWER__) { setFlag('자료 불러오기 실패 — 1분 뒤 다시 시도 · ' + String(err && err.message || err).slice(0, 40)); setTimeout(() => location.reload(), 60000); } else if (LOCAL) openCfg(String(err && err.message || err)); else console.error(err); });
 </script>
