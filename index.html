@@ -9,22 +9,51 @@
 /* v3.11 사내 상황판(깃허브 Pages) — Apps Script 화면과 같은 코드를 쓰기 위한 google.script.run 대체
  *  · 자료 조회: 같은 주소의 data.json(10분 게시) — n8n 실행 횟수 사용 안 함
  *  · 통보현황·해제 메모: data.json 안의 암호화 자료를 상황판 키로 해독(키 입력한 화면만)
- *  · 동작(통보·해제·사후확인·지금 수집·이력·관제영상 키): n8n 중계 웹훅 → Apps Script doPost (요청 서명, 응답 암호화) */
+ *  · 동작(통보·해제·사후확인·지금 수집·이력·관제영상 키): n8n 중계 웹훅 → Apps Script doPost (요청 서명, 응답 암호화)
+ *  · v3.13 연결 정보: 관리자 비밀번호로 암호화된 cfg.json(중계 주소·상황판 키)을 자동으로 읽음 — PC에는 비밀번호에서 만든 파생 키만 저장 */
 window.__PUBLIC_VIEWER__ = true;
 (function () {
   var LSG = function (k) { try { return localStorage.getItem(k) || ''; } catch (e) { return (window.__PMEM || {})[k] || ''; } };
   var LSS = function (k, v) { window.__PMEM = window.__PMEM || {}; window.__PMEM[k] = v; try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) {} };
-  var S = { data: null, at: 0, keys: null, keyFor: '', override: null, liveUntil: 0, liveAt: 0, liveDash: null, secOk: false, secErr: '' };
+  var S = { data: null, at: 0, keys: null, keyFor: '', override: null, liveUntil: 0, liveAt: 0, liveDash: null, secOk: false, secErr: '', cfg: null, cfgAt: 0, cfgFor: '' };
   var te = function (s) { return new TextEncoder().encode(s); };
   var b64d = function (s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
   var cat = function (a, b) { var u = new Uint8Array(a.length + b.length); u.set(a, 0); u.set(b, a.length); return u; };
   var hex = function (buf) { return Array.prototype.map.call(new Uint8Array(buf), function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); };
   var imp = function (raw, use) { return crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, use); };
   var clone = function (o) { return JSON.parse(JSON.stringify(o)); };
+  var b64e = function (u) { var s = ''; for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); };
+  function akKeys(ak) {
+    return imp(b64d(ak), ['sign']).then(function (k) { return Promise.all(['enc', 'mac'].map(function (w) { return crypto.subtle.sign('HMAC', k, te(w)); })); })
+      .then(function (r) { return Promise.all([imp(r[0], ['sign']), imp(r[1], ['sign', 'verify'])]); })
+      .then(function (k2) { return { enc: k2[0], mac: k2[1] }; });
+  }
+  function deriveAk(pass, salt, iter) {
+    return crypto.subtle.importKey('raw', te(pass), 'PBKDF2', false, ['deriveBits'])
+      .then(function (k) { return crypto.subtle.deriveBits({ name: 'PBKDF2', salt: b64d(salt), iterations: iter, hash: 'SHA-256' }, k, 256); })
+      .then(function (bits) { return b64e(new Uint8Array(bits)); });
+  }
+  function getCfg() {
+    return fetch('cfg.json?t=' + Math.floor(Date.now() / 60000), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('연결 정보 파일 없음 — 관리자: Apps Script setupBoardAccess 실행'); return r.json(); });
+  }
+  // 연결 정보: ① 직접 입력값(예비) ② 관리자 비밀번호로 푼 cfg.json(10분 캐시, 주소·키가 바뀌면 자동 반영)
+  function conn() {
+    var mu = LSG('pnl.url'), mk = LSG('pnl.key');
+    if (mu && mk) return Promise.resolve({ url: mu, pass: mk, how: 'manual' });
+    var ak = LSG('pnl.ak'); if (!ak) return Promise.resolve(null);
+    if (S.cfg && S.cfgFor === ak && Date.now() - S.cfgAt < 600000) return Promise.resolve(S.cfg);
+    return getCfg().then(function (j) {
+      if (LSG('pnl.salt') && j.salt !== LSG('pnl.salt')) throw new Error('관리자 비밀번호가 바뀌었습니다');
+      return akKeys(ak).then(function (K) { return dec(j.sec, K); });
+    }).then(function (x) { S.cfg = { url: x.url, pass: x.key, how: 'admin' }; S.cfgAt = Date.now(); S.cfgFor = ak; return S.cfg; },
+      function (e) { var m = String(e && e.message || e); throw new Error(/불일치|바뀌었/.test(m) ? '관리자 비밀번호가 바뀌었습니다' : m); });
+  }
   function keys() {
-    var pass = LSG('pnl.key');
-    if (!pass) return Promise.resolve(null);
     if (!(window.crypto && crypto.subtle)) return Promise.reject(new Error('이 브라우저는 암호 기능을 지원하지 않습니다'));
+    return conn().then(function (c) { return c ? keysFor(c.pass) : null; });
+  }
+  function keysFor(pass) {
     if (S.keys && S.keyFor === pass) return Promise.resolve(S.keys);
     return imp(te(pass), ['sign']).then(function (k) { return Promise.all(['enc', 'mac', 'auth'].map(function (w) { return crypto.subtle.sign('HMAC', k, te(w)); })); })
       .then(function (r) { return Promise.all([imp(r[0], ['sign']), imp(r[1], ['sign', 'verify']), imp(r[2], ['sign'])]); })
@@ -58,20 +87,26 @@ window.__PUBLIC_VIEWER__ = true;
         d.notify = x.notify || null;
         (d.events || []).forEach(function (e) { if (e.manual && x.memo && x.memo[e.id]) e.manual.memo = x.memo[e.id]; });
         d.viewer = { email: '', approver: true }; S.secOk = true; S.secErr = ''; return d;
-      }, function (err) { S.secOk = false; S.secErr = String(err && err.message || err); return d; });
+      }, function (err) { S.secOk = false; S.secErr = String(err && err.message || err); if (S.cfg && S.cfg.how === 'admin') S.cfg = null; return d; });   // 키가 바뀌었으면 다음 조회 때 연결 정보 다시 받기
     }, function (err) { S.secOk = false; S.secErr = String(err && err.message || err); return d; });
   }
   function prep(d) { d.meta.publishedAt = d.meta.publishedAt || d.meta.now; d.viewer = { email: '', approver: true }; return d; }
-  function relay(op, args) {
-    var url = LSG('pnl.url');
-    if (!url) return Promise.reject(new Error('연결 설정 필요 — 상단 「연결 설정」에 중계 주소와 상황판 키를 입력하세요'));
-    return keys().then(function (K) {
-      if (!K) throw new Error('연결 설정 필요 — 상황판 키 미입력');
-      var ts = Date.now(), p = JSON.stringify(args || []);
+  function relay(op, args, retried) {
+    var C = null;
+    return conn().then(function (c) {
+      if (!c) throw new Error('연결 설정 필요 — 상단 「연결 설정」에서 PC 이름과 관리자 비밀번호를 입력하세요');
+      C = c; return keysFor(c.pass);
+    }).then(function (K) {
+      var url = C.url;
+      var ts = Date.now(), p = JSON.stringify({ a: args || [], dev: LSG('pnl.dev') });
       return crypto.subtle.sign('HMAC', K.auth, te(op + '\n' + ts + '\n' + p)).then(function (sig) {
         return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: op, ts: ts, p: p, sig: hex(sig) }) });
       }).then(function (r) { if (!r.ok) throw new Error('중계 응답 HTTP ' + r.status); return r.json(); })
-        .then(function (j) { if (Array.isArray(j)) j = j[0]; if (!j || j.ok === false) throw new Error((j && j.error) || '중계 응답 오류'); return j.e ? dec(j.e, K) : j; });
+        .then(function (j) { if (Array.isArray(j)) j = j[0]; if (!j || j.ok === false) throw new Error((j && j.error) || '중계 응답 오류'); return j.e ? dec(j.e, K) : j; })
+        .catch(function (e) {                                       // 관리자가 주소·키를 바꾼 직후: 연결 정보를 다시 받아 1회 재시도
+          if (!retried && C && C.how === 'admin' && /키 불일치|HTTP 404|Failed to fetch/.test(String(e && e.message || e))) { S.cfg = null; S.keys = null; return relay(op, args, true); }
+          throw e;
+        });
     });
   }
   function getDash() {
@@ -111,7 +146,20 @@ window.__PUBLIC_VIEWER__ = true;
     withSuccessHandler: function (okF) { return { withFailureHandler: function (ngF) { return runner(okF, ngF); } }; },
     withFailureHandler: function (ngF) { return { withSuccessHandler: function (okF) { return runner(okF, ngF); } }; }
   } } };
-  window.PUBX = { S: S, relay: relay, get: LSG, set: function (u, k) { LSS('pnl.url', u); LSS('pnl.key', k); S.keys = null; S.keyFor = ''; S.override = null; S.secErr = ''; } };
+  function reset() { S.keys = null; S.keyFor = ''; S.cfg = null; S.cfgFor = ''; S.override = null; S.secErr = ''; S.secOk = false; }
+  window.PUBX = { S: S, relay: relay, get: LSG,
+    set: function (u, k) { LSS('pnl.url', u); LSS('pnl.key', k); reset(); },
+    clearAll: function () { ['pnl.url', 'pnl.key', 'pnl.ak', 'pnl.salt', 'pnl.dev'].forEach(function (k) { LSS(k, ''); }); reset(); },
+    // 관리자 비밀번호로 연결: cfg.json을 실제로 풀어 본 뒤 파생 키만 저장(비밀번호 자체는 저장하지 않음)
+    setAdmin: function (pass, dev) {
+      return getCfg().then(function (j) {
+        return deriveAk(pass, j.salt, j.iter || 20000).then(function (ak) {
+          return akKeys(ak).then(function (K) { return dec(j.sec, K); }).then(function () {
+            LSS('pnl.url', ''); LSS('pnl.key', ''); LSS('pnl.ak', ak); LSS('pnl.salt', j.salt); LSS('pnl.dev', dev); reset();
+          }, function () { throw new Error('관리자 비밀번호가 맞지 않습니다'); });
+        });
+      }).then(function () { return relay('hello', []); });
+    } };
 })();
 </script>
 </head>
@@ -719,7 +767,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
       <div class="list" id="naturalList"></div>
     </section>
   </main>
-  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.12 사내 상황판(깃허브 Pages · n8n 중계)</p>
+  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.13 사내 상황판(깃허브 Pages · n8n 중계 · 관리자 비밀번호 연결)</p>
 </div>
 
 <div class="hist-ov" id="histOv" hidden>
@@ -2179,31 +2227,56 @@ function viewFlag(d) {
   var S = (window.PUBX || {}).S || {}, pa = d && d.meta && (d.meta.publishedAt || d.meta.now);
   if (window.__DEMO__) { var mm = pa ? Math.round((Date.now() - new Date(pa)) / 60000) : null; return '시연 버전 · 공개 재난정보' + (mm !== null && mm > 40 ? ' · 자료 게시 지연 ' + mm + '분' : pa ? ' · 게시 ' + hm(pa) : ''); }
   var m = pa ? Math.round((Date.now() - new Date(pa)) / 60000) : null;
-  var who = S.secOk ? '사내 상황판 · 승인자 연결' : S.secErr ? '사내 상황판 · ' + S.secErr + ' — 연결 설정 확인' : '사내 상황판 · 보기 전용(연결 설정 시 통보 가능)';
+  var dev = PUBX.get('pnl.dev');
+  var who = S.secOk ? '사내 상황판 · 승인자 연결' + (dev ? ' (' + dev + ')' : '') : S.secErr ? '사내 상황판 · ' + S.secErr + ' — 연결 설정 확인' : '사내 상황판 · 보기 전용(연결 설정 시 통보 가능)';
   return who + (m !== null && m > 40 ? ' · 자료 게시 지연 ' + m + '분' : pa ? ' · 게시 ' + hm(pa) : '');
 }
 function pubOpenCfg(msg) {
+  var ov = $('#cfgOv'), box = ov.querySelector('.cfg');
   $('#cfgTitle').textContent = '사내 상황판 연결 설정';
-  $('#cfgOv').querySelector('p').textContent = '중계 주소(n8n 웹훅)와 상황판 키를 입력하면 이 PC 브라우저에만 저장되어 통보·해제·이력 보기·지금 수집·관제영상·통보현황을 쓸 수 있습니다. 두 칸을 비우고 저장하면 보기 전용으로 돌아갑니다. 여러 사람이 쓰는 PC에서는 사용 후 비워 두세요.';
-  var ls = $('#cfgOv').querySelectorAll('label'); if (ls[0]) ls[0].textContent = '중계 주소 (n8n 웹훅 …/webhook/skb-board-relay)'; if (ls[1]) ls[1].textContent = '상황판 키 (Apps Script makePanelKey로 만든 값)';
+  ov.querySelector('p').textContent = 'PC 이름과 관리자 비밀번호를 입력하면 중계 주소·상황판 키가 자동으로 설정됩니다(주소·키가 바뀌어도 다시 입력할 필요 없음). 비밀번호는 저장하지 않고 이 PC 브라우저에만 연결 정보가 남습니다. 모두 비우고 저장하면 보기 전용으로 돌아갑니다.';
+  if (!$('#cfgDev')) {
+    var first = box.querySelector('label');
+    var mk = function (html) { var t = document.createElement('div'); t.innerHTML = html; return t.firstChild; };
+    box.insertBefore(mk('<label for="cfgDev">PC 이름 (사용 기록에 표시 — 예: 편성팀-로컬PC)</label>'), first);
+    box.insertBefore(mk('<input id="cfgDev" maxlength="30" autocomplete="off" placeholder="예: 편성팀-로컬PC">'), first);
+    box.insertBefore(mk('<label for="cfgPass">관리자 비밀번호</label>'), first);
+    box.insertBefore(mk('<input id="cfgPass" type="password" autocomplete="off" placeholder="관리자에게 받은 비밀번호(예: ABCD-EF23-GH45)">'), first);
+    var det = mk('<details id="cfgManual" style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted);font-size:12px">직접 입력(예비 — 관리자 비밀번호를 쓰지 않을 때)</summary></details>');
+    box.insertBefore(det, first);
+    ['cfgUrl', 'cfgKey'].forEach(function (id) { var inp = $('#' + id), lb = box.querySelector('label[for="' + id + '"]'); det.appendChild(lb); det.appendChild(inp); });
+  }
+  var ls = box.querySelectorAll('#cfgManual label'); if (ls[0]) ls[0].textContent = '중계 주소 (n8n 웹훅 …/webhook/skb-board-relay)'; if (ls[1]) ls[1].textContent = '상황판 키 (PANEL_KEY)';
   $('#cfgUrl').placeholder = 'https://○○.app.n8n.cloud/webhook/skb-board-relay'; $('#cfgKey').placeholder = 'PANEL_KEY 값'; $('#cfgKey').type = 'password';
+  $('#cfgDev').value = PUBX.get('pnl.dev'); $('#cfgPass').value = '';
   $('#cfgUrl').value = PUBX.get('pnl.url'); $('#cfgKey').value = PUBX.get('pnl.key');
+  $('#cfgManual').open = !!(PUBX.get('pnl.url') || PUBX.get('pnl.key'));
   $('#cfgSave').textContent = '저장 후 연결 확인';
-  $('#cfgErr').className = 'err'; $('#cfgErr').textContent = msg || '';
-  $('#cfgOv').hidden = false;
+  var st = PUBX.get('pnl.ak') ? '현재: 관리자 비밀번호로 연결됨 (' + (PUBX.get('pnl.dev') || '이름 없음') + ')' : PUBX.get('pnl.key') ? '현재: 직접 입력으로 연결됨' : '현재: 보기 전용';
+  $('#cfgErr').className = 'err'; $('#cfgErr').textContent = msg || st;
+  ov.hidden = false;
 }
 function pubCfgSave() {
-  var u = $('#cfgUrl').value.trim(), k = $('#cfgKey').value.trim(), er = $('#cfgErr');
-  if (u && !/^https:\/\/[^\s]+$/.test(u)) { er.textContent = '중계 주소는 https:// 로 시작해야 합니다'; return; }
-  PUBX.set(u, k);
-  if (!u && !k) { er.textContent = ''; $('#cfgOv').hidden = true; toast('연결 정보를 지웠습니다 — 보기 전용으로 전환', 5000); load(); return; }
-  if (!u || !k) { er.textContent = '중계 주소와 상황판 키를 모두 입력하세요'; return; }
-  er.className = 'err'; er.textContent = '연결 확인 중…';
-  PUBX.relay('ping', []).then(function () {
-    er.className = 'err cfg-ok'; er.textContent = '연결 확인 완료 — 승인자 기능을 사용할 수 있습니다';
-    setTimeout(function () { $('#cfgOv').hidden = true; }, 1200); load();
-  }, function (err) { er.className = 'err'; er.textContent = '연결 실패: ' + String(err && err.message || err); });
+  var dev = $('#cfgDev').value.trim(), pass = $('#cfgPass').value.trim(), u = $('#cfgUrl').value.trim(), k = $('#cfgKey').value.trim(), er = $('#cfgErr');
+  var done = function (m) { er.className = 'err cfg-ok'; er.textContent = m; setTimeout(function () { $('#cfgOv').hidden = true; }, 1200); load(); };
+  var fail = function (err) { er.className = 'err'; er.textContent = '연결 실패: ' + String(err && err.message || err); };
+  if (!dev && !pass && !u && !k) { PUBX.clearAll(); er.textContent = ''; $('#cfgOv').hidden = true; toast('연결 정보를 지웠습니다 — 보기 전용으로 전환', 5000); load(); return; }
+  if (pass) {
+    if (!dev) { er.textContent = 'PC 이름을 입력하세요(사용 기록에 표시됩니다)'; return; }
+    er.className = 'err'; er.textContent = '연결 확인 중… (처음 1회 몇 초 걸릴 수 있음)';
+    PUBX.setAdmin(pass, dev).then(function () { $('#cfgPass').value = ''; done('연결 완료 — ' + dev + ' · 주소·키가 바뀌어도 자동 반영됩니다'); }, fail);
+    return;
+  }
+  if (u || k) {
+    if (!/^https:\/\/[^\s]+$/.test(u) || !k) { er.textContent = '직접 입력은 https:// 중계 주소와 상황판 키를 모두 입력하세요'; return; }
+    PUBX.set(u, k); er.className = 'err'; er.textContent = '연결 확인 중…';
+    PUBX.relay('ping', []).then(function () { done('연결 확인 완료(직접 입력)'); }, fail);
+    return;
+  }
+  if (dev && PUBX.get('pnl.ak')) { try { localStorage.setItem('pnl.dev', dev); } catch (e) {} done('PC 이름을 바꿨습니다 — ' + dev); return; }
+  er.textContent = '관리자 비밀번호를 입력하세요';
 }
+
 function openCfg(msg){
   if (window.__PUBLIC_VIEWER__) return pubOpenCfg(msg);
   $('#cfgUrl').value = LS.get('dash.url'); $('#cfgKey').value = LS.get('dash.key');
