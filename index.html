@@ -650,7 +650,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
 .rdr-zlab{fill:#c2410c;font-weight:700;paint-order:stroke;stroke:#fff;stroke-linejoin:round;pointer-events:none}.rdr-mlab{fill:#333;paint-order:stroke;stroke:#fff;stroke-linejoin:round;pointer-events:none}
 .rdr-bar{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 16px 0}.rdr-seg{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);flex-wrap:wrap}.rdr-seg button{font:inherit;color:var(--fg);background:var(--panel-2);border:1px solid var(--line);border-radius:3px;padding:3px 9px;cursor:pointer}.rdr-seg button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent)}
 .rdr-foot{flex-direction:column;align-items:flex-start;gap:2px}
-.rdr-stage{position:relative}.rdr-period{padding:0 16px 8px;font-size:12.5px;color:var(--fg);font-variant-numeric:tabular-nums}#rdrSvg.sat .rdr-bg{fill:#000}
+.rdr-stage{position:relative}#rdrOv .hist>*{flex-shrink:0}#rdrOv .hist>.rdr-stage{flex:1 1 auto;min-height:200px;height:min(640px,calc(90vh - 290px));overflow:hidden}#rdrSvg{width:100%;height:100%;max-width:none;max-height:none;background:transparent;display:block}.rdr-period{padding:0 16px 8px;font-size:12.5px;color:var(--fg);font-variant-numeric:tabular-nums}#rdrSvg.sat .rdr-bg{fill:#000}
 .wx-load{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(10,15,19,.72);color:#fff;font-size:14px;z-index:2}.wx-load[hidden]{display:none}.wx-load small{color:#c9d3db;font-size:12px}
 .wx-spin{width:28px;height:28px;border:3px solid rgba(255,255,255,.25);border-top-color:#5aa9d6;border-radius:50%;animation:wxspin .9s linear infinite}@keyframes wxspin{to{transform:rotate(360deg)}}
 .rdr-ctl{display:flex;align-items:center;gap:10px;padding:8px 16px}.rdr-ctl input{flex:1}
@@ -816,7 +816,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
       <div class="list" id="naturalList"></div>
     </section>
   </main>
-  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.16.4 사내 상황판(깃허브 Pages · n8n 중계 · 사용자 이름·비밀번호 연결)</p>
+  <p class="map-note">지도 경계: 통계청 SGIS 행정동 경계(2026.10.1 기준) — 가공 vuski/admdongkor (공공누리 제1유형·CC BY 4.0). 특보구역은 시군구로 근사 표시, 권역 확대 시 읍면동 경계 표시. · 화면 v3.16.5 사내 상황판(깃허브 Pages · n8n 중계 · 사용자 이름·비밀번호 연결)</p>
 </div>
 
 <div class="hist-ov" id="histOv" hidden>
@@ -884,7 +884,7 @@ svg.map .elab{font-size:11px;fill:var(--muted);pointer-events:none;paint-order:s
   <div class="hist" role="dialog" aria-modal="true" aria-labelledby="rdrTitle" style="width:min(760px,100%)">
     <div class="hist-head"><h2 id="rdrTitle">기상현황 — 레이더·위성</h2><span class="cam-ev" id="rdrTime"></span><button type="button" class="hbtn" id="rdrClose">닫기</button></div>
     <div class="rdr-bar"><div class="rdr-seg" id="rdrModes"><button type="button" data-wm="radar" aria-pressed="true">레이더</button><button type="button" data-wm="ir105" aria-pressed="false">위성 적외</button><button type="button" data-wm="rgb-hlc" aria-pressed="false">위성 RGB</button><button type="button" data-wm="vi006" aria-pressed="false">위성 가시</button></div><div class="rdr-seg" id="rdrViews"></div></div>
-    <div class="rdr-stage"><svg id="rdrSvg" viewBox="0 0 635 620" preserveAspectRatio="xMidYMid meet" role="img" aria-label="기상청 레이더 합성 영상과 방송권역선"><rect x="-2000" y="-2000" width="5000" height="5000" class="rdr-bg"></rect><g id="wxStack"></g><g id="rdrLay"></g></svg><div class="wx-load" id="wxLoad" hidden><span class="wx-spin"></span><b id="wxLoadMain">영상 불러오는 중…</b><small id="wxLoadSub"></small></div></div>
+    <div class="rdr-stage"><svg id="rdrSvg" viewBox="0 0 635 620" preserveAspectRatio="xMidYMid meet" role="img" aria-label="기상청 레이더 합성 영상과 방송권역선"><rect id="wxBg" x="0" y="0" width="1000" height="976" class="rdr-bg"></rect><g id="wxStack"></g><g id="rdrLay"></g></svg><div class="wx-load" id="wxLoad" hidden><span class="wx-spin"></span><b id="wxLoadMain">영상 불러오는 중…</b><small id="wxLoadSub"></small></div></div>
     <div class="rdr-ctl"><button type="button" class="hbtn" id="rdrPlay">재생</button><input type="range" id="rdrRange" min="0" max="12" step="1" value="12" aria-label="영상 시각"><button type="button" class="hbtn" id="rdrLatest">최신</button><span class="rdr-seg" id="rdrItv" style="display:none"><span>간격</span><button type="button" data-itv="10" aria-pressed="true">10분</button><button type="button" data-itv="2" aria-pressed="false">2분</button></span></div>
     <div class="rdr-period" id="rdrPeriod"></div>
     <div class="ntf-dlg-foot rdr-foot"><span class="cam-src" id="rdrMsg"></span><span class="cam-src" id="rdrSrc"></span></div>
@@ -1959,6 +1959,7 @@ function wxCalApply(ar){
   RDR_CAL.h = 1000 * (ar || c.ar);
   rdrProj = d3.geoConicConformal().parallels([30, 60]).rotate([-126, 0]).center([0, 38]).scale(c.s * 1000).translate([c.tx * 1000, c.ty * 1000]);
   d3.selectAll('#wxStack image').attr('width', 1000).attr('height', RDR_CAL.h.toFixed(1));
+  d3.select('#wxBg').attr('height', RDR_CAL.h.toFixed(1));   /* v3.16.5 바탕은 영상 영역만 */
 }
 var WXL = { timer:null };
 function wxLoading(on, main, sub){                  /* v3.16.3 영상 로딩 안내(0.25초 넘게 걸릴 때만 표시) */
@@ -2105,7 +2106,7 @@ function wxShow(i){
   wxFetch(i, function(ok){
     if (mk !== WX.mk || WX.idx !== i) return;
     wxLoading(false);
-    if (ok) { wxDisplay(i); wxArCheck(i); if (WX.mode !== 'radar' && !WX.list && WX.listErr) rdrMsg(WX.listErr, true); return; }
+    if (ok) { wxDisplay(i); rdrMsg(''); wxArCheck(i); if (WX.mode !== 'radar' && !WX.list && WX.listErr) rdrMsg(WX.listErr, true); return; }
     if (i === last && WX.back < 3) {                 /* 최신 영상 미게시 → 한 단계씩 앞으로 최대 3회 */
       WX.back++;
       if (WX.list && WX.frames.length > 1) WX.frames.pop(); else wxFrames();
